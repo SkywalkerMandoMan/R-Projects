@@ -1,0 +1,262 @@
+---
+title: "Heart Disease Risk Analysis"
+author: "Michael Huynh"
+date: "6/1/2024"
+output: html_document
+---
+
+## Load Packages
+```{r} 
+library(pacman)
+p_load(tidyverse, dplyr, ggplot2, partykit,
+       lubridate, magrittr, ggthemes, GGally,
+       psych, corrplot, partykit, CHAID,
+       tidymodels, rsample, png, grid)
+heart_df <- read_csv("/Users/michaelhuynh/Desktop/Programming/Datasets/heart_disease.csv")
+
+```
+
+## Find any NAs/Missing Values
+```{r} 
+any(is.na(heart_df))
+colSums(is.na(heart_df))
+```
+
+## Descriptive Statistics
+```{r}
+heart_df %>% 
+  select(where(is.numeric)) %>%
+  describe()
+```
+
+## Patient Age Distribution 
+```{r}
+heart_df %>% 
+  ggplot(aes(x = Age)) +
+  geom_histogram(aes(y = ..count..), fill = "blue", color = "black", alpha = 0.7, bins = 30) +
+  labs(title = "Age Distribution by Gender",
+       x = "Age",
+       y = "Count") +
+  theme_bw() +
+  facet_wrap(~ Sex, ncol = 1) + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+
+#### Notes
+  * Given that there are more male patients than female patients, the spread of age distribution is greater.
+
+## Distribution Plots of Health Factors
+```{r}
+heart_df %>% 
+  select(where(is.character)) %>% 
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "value") %>% 
+  ggplot(aes(x = value, fill = variable)) + 
+  facet_wrap( ~ variable, scales = "free") +
+  geom_bar() +
+  theme_bw() +
+  labs(title = "Distribution Plots of Categorical Variables") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold")) +
+  scale_colour_brewer() +
+  theme_light() +
+  guides(fill = "none")
+```
+
+#### Notes
+  * Asymptomatic chest pain was the most frequent type of chest pain among patients, meaning that sizable portion of patients don't feel chest pain when compared to atypical angina, non-anginal pain, and typical angina.
+  * A higher frequency of patients had non-exercise-induced angina, meaning that the majority of patients had chest pain or discomfort that occurs without physical exertion compared to those who did.
+  * The majority of patients had normal resting ECG (resting electrocardiogram) levels, meaning that they had normal heart beat levels compared to other groups of patients that have abnormal heart beat levels from LVH (left ventricular hypertrophy) and or ST artery blockage.
+  * The majority of patients possessed either flat or upward ST slopes, meaning that while a sizable portion of patients possess normal ST Slope levels, the sizable portion that does possess upward ST Slope levels may be experiencing unusual heart elevation activity.
+
+## Distribution of Age and Health Factors
+```{r}
+heart_df %>% 
+  select(where(is.numeric), -HeartDisease) %>% # Leave out HeartDisease column
+  
+  # Increases the number of rows while decreasing number of columns 
+  # Calling all columns with everything(), we pivot the column names so that they become row names 
+  # Creates new column called value that corresponds to original column values
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "value") %>%
+  # Creates ggplot for new unique row name
+  ggplot(aes(x = value, fill = variable)) +
+  # Creates multiple plots for each variable.
+  # The scales argument being specified as free to scale each plot independently of one another.
+  facet_wrap(~ variable, scales = "free") +
+  # Creates 30 bins and yields 70% non-transparency, making the plots easier to see
+  geom_histogram(bins = 30, alpha = 0.7) +
+  labs(title = "Distribution Plots for Numeric Variables") +
+  scale_colour_brewer() + 
+  theme_light() +
+  guides(fill = "none") 
+```
+
+#### Notes
+  * The age distribution spread, which follows a normal distribution, ranges from 30 to estimated 80 for all patients.
+  * Cholesterol level distribution spans from 0 to estimated 600, but a concerning number of patients held 0 cholesterol levels.
+  * MaxHR level distribution, similar to Age, also follows a normally-distributed spread that is centrally concentrated from levels 125 to 150.
+  * RestingBP (resting blood pressure) levels are skewed primarily to the left and range from estimated 100 to estimated 200.
+  * Oldpeak levels (ST depression induced by exercise relative to rest) fall primarily from between 0 and 5.
+    
+## Boxplots
+```{r}
+heart_df %>% 
+  mutate(HeartDisease = factor(HeartDisease)) %>% # Turns HeartDisease into a factor object
+  select(HeartDisease, where(is.numeric)) %>% # Selects only HeartDisease and all variables that are numeric
+  pivot_longer(cols = where(is.numeric), names_to = "variable", values_to = "value") %>%  # Shortens number of columns by placing column names into rows under new column "variable" while assigning them their values based on previous structure.
+  ggplot(aes(x = HeartDisease, y = value, fill = HeartDisease)) +
+  geom_boxplot() +
+  facet_wrap(~ variable, scales = "free") +
+  labs(x = "Output", y = "Value", title = "Box Plots by Output") +
+  scale_colour_brewer() +
+  theme_light()
+```
+
+#### Notes
+  * Age:
+      + Patients at higher risk for heart disease tend to be older with 50% of them between ages 51 and 62 with the median age of high-risk patients around 57, which suggestss age as a significant factor in heart disease risk.
+  * Cholesterol: 
+      + The interquartile range shows that 50% of high-risk patients have cholesterol levels between 0 and 260. Surprisingly, even low cholesterol levels appear to be associated with a higher risk of heart disease, which may indicate other underlying factors at play.
+  * Fasting BS: 
+      + Despite fasting blood sugar being a binary variable (0 or 1), a value of 1 (indicating blood sugar levels exceeding 120 mg/dl) is associated with a significantly higher risk of heart disease.
+  * MaxHR: 
+      + Patients without heart disease generally have higher maximum heart rate levels, with 50% ranging from 135 to 165. 
+      + In contrast, those with heart disease typically exhibit lower maximum heart rates, with 50% falling between 110 and 148, suggesting that reduced max heart rate is a potential indicator of heart disease.
+  * OldPeak:
+      + Patients with heart disease show a wider range of higher oldpeak values (ST depression), with 50% falling between 0 and 2. 
+      + This suggests that higher levels of ST depression during exercise may be indicative of abnormal heart activity and an increased risk of heart disease.
+
+## Correlation Analysis
+```{r}
+heart_df %>% 
+  select(where(is.numeric)) %>% 
+  ggcorr(label = TRUE, label_size = 4)
+```
+
+#### Notes:
+  * Out of all variables, Oldpeak has the most positive correlation with HeartDisease, indicating that there is a positive associative relationship between having higher ST depresssion levels and suffering from heart disease.
+  * In addition, FastingBS and Age have equal positive correlation levels with HeartDisease, also indicating positive associative relationships between having higher fasting blood sugar levels/being older and suffering from heart disease.
+  * There is a strong negative correlation between age and maximum heart rate (MaxHR). This suggests that as people get older, their maximum heart rate tends to decrease. This decrease in MaxHR is associated with an increased risk of heart disease.
+  * It's important to clarify that while older age is associated with lower MaxHR, the relationship between MaxHR and heart disease is not necessarily causal as it reflects an association rather than a direct cause-and-effect relationship.
+
+## CHAID Decision Tree
+```{r, fig.width= 8, fig.height= 8}
+chaid_tree <- readPNG("/Users/michaelhuynh/Desktop/Programming/R/Heart_Risk_CHAID_Tree.png")
+grid.raster(chaid_tree, x = 0.5, y = 0.5, width = 1, height = 1)
+```
+
+#### Notes
+  * Across all groups, being male is strongly associated with a higher risk of heart disease. 
+      + Although there are more male patients in this dataset, the increased risk can be partially attributed to biological factors, such as lower levels of estrogen and progesterone in men, which are hormones that help protect blood vessels and reduce heart disease risk.
+  * Asymptomatic chest pain shows a strong association with heart disease, highlighting a significant risk when such conditions go undiagnosed. This underscores the importance of thorough cardiovascular assessments, even in the absence of symptoms.
+  * The relationship between fasting blood sugar (FastingBS) and heart disease is strong across genders, though its strength varies between males and females. 
+      + Consistently, elevated fasting blood sugar levels above 120 mg/dl are associated with an increased risk of heart disease, reinforcing its importance as a risk factor.
+
+## Creating Training and Testing Datasets
+```{r}
+heart_df$HeartDisease = as.factor(heart_df$HeartDisease)
+
+# Data Split (need rsample to run initial_split!)
+# This allocates 70% of the data from heart_df_factor to training set
+# 30% remaining data is allocated to test set
+# strata argument is used to stratify by HeartDisease to ensure that both training and test sets have similar proportions of those with/without heart disease to prevent
+heart_split = initial_split(heart_df,
+                            prop = 0.7,
+                            strata = HeartDisease)
+
+# Create training and test data sets
+heart_training <- heart_split %>% 
+  training()
+heart_test <- heart_split %>% 
+  testing()
+
+# Data Preprocessing and Modeling
+## Creates recipe variable where HeartDisease is dependent variable being affected by all predictors in heart_training dataset.
+## step_corr removes all numeric variables that are highly correlated with each other to mitigate multicollinearity
+## step_normalize standardizes all numeric variables to have zero mean and unit variance; this is really good for KNN or support vector machines.
+## step_dummy converts all nominal (categorical) variables to dummy variables except for HeartDisease as done by -all_outcomes() argument.
+heart_recipe <- recipe(HeartDisease ~ .,
+                       data = heart_training) %>% 
+  step_corr(all_numeric(), threshold = 0.8) %>% 
+  step_normalize(all_numeric()) %>% 
+  step_dummy(all_nominal(), -all_outcomes())
+
+# Creates heart_recipe_prep as recipe variable that uses heart_training data, cleaned of highly correlated variables and has only standardized variables
+# Then it applies prep function on training data to estimate the necessary statistics (mean, standard deviations) to apply the defined transformations
+heart_recipe_prep <- heart_recipe %>%
+  prep(training = heart_training)
+
+# Takes trained recipe and applies preprocessing steps like removing highly correlated variables above 0.8 threshold, normalizing numeric variables, and applies dummy variables (created in heart_recipe) to the original training dataset.
+# Applies preprocessing steps defined in heart_recipe_prep to original training dataset, heart_training
+heart_training_prep <- heart_recipe_prep %>%
+  bake(new_data = NULL)
+
+# Takes recipe object, heart_recipe_prep, and applies preprocessing steps like removing highly correlated variables above 0.8 threshold, 
+# normalizing numeric variables, and applies dummy variables to the heart_test data set
+heart_test_prep <- heart_recipe_prep %>%
+  bake(new_data = heart_test)
+```
+
+## Logistic Regression Model
+```{r}
+# Logistic Model
+
+# Creates logistic regression model and stores to variable glm_model
+# set_engine sets computational engine to fit model based on general linear model framework
+# set_mode sets mode to classification; this is especially applicable to binary variables.
+glm_model <- logistic_reg() %>% 
+  set_engine('glm') %>% 
+  set_mode('classification')
+
+# Fits logistic regression model to the preprocessed training dataset
+glm_fit <- glm_model %>% 
+  fit(HeartDisease ~ .,
+      data = heart_training_prep)
+
+summary(glm_fit$fit)
+```
+
+#### Notes
+  * The logistic regression analysis identifies the following variables as having statistically significant effects on the risk of heart disease: Cholesterol, Fasting Blood Sugar (FastingBS), Sex (male), Chest Pain Type (ATA and NAP), Exercise Angina (Yes), ST Slope (Flat and Upward).
+      + For each unit increase in Cholesterol level, the risk of heart disease decreases by approximately 0.384 units. This counterintuitive result suggests that very low cholesterol levels may be associated with higher heart disease risk, potentially indicating other underlying health issues.
+      + An increase in Fasting Blood Sugar levels is associated with a rise in heart disease risk by about 0.467 units. Elevated fasting blood sugar levels above 120 mg/dl are a significant risk factor for heart disease.
+      + Being male increases the risk of heart disease by approximately 1.614 units compared to females. This suggests that gender plays a significant role in heart disease risk, potentially due to biological and hormonal differences.
+      + Having chest pain ATA and NAP suggests that while they are dangerous symptoms, the risk of heart disease is lower when symptoms are showing which can make it easier to identify and seek treatment versus if a patient was asymptomatic.
+      + If the patient's ST_Slope was flat, the risk of heart disease is increased by 1.466 units whereas an upward slope is shown to decrease it by 1.19935 units.
+
+## Model Accuracy Check
+```{r}
+# Logistic Regression Model Predictions on Test Data
+
+# Applies fitted logistic regression model, glm_fit, to testing data and generates class predictions
+glm_class_prediction <- predict(glm_fit,
+                                new_data = heart_test_prep,
+                                type = "class")
+
+# Applies fitted logistic regression model, glm_fit, to testing data and generates probability predictions
+glm_prob_prediction <- predict(glm_fit,
+                        new_data = heart_test_prep,
+                        type = "prob")
+
+# Combines predicted and observed values into dataframe
+glm_results <- heart_test %>% 
+  select(HeartDisease) %>% 
+  bind_cols(glm_class_prediction, glm_prob_prediction)
+
+# Rename glm_results column
+glm_results <- glm_results %>%
+  rename(predicted_class = .pred_class, prob_0 = .pred_0, prob_1 = .pred_1)
+
+# Creates combined dataframe that shows predicted vs actual outcomes
+glm_results
+
+# Creates confusion matrix that shows predicted vs actual class labels 
+confusion_matrix = conf_mat(glm_results, truth = HeartDisease, estimate = predicted_class)
+print(confusion_matrix)
+```
+#### Notes:
+  * Based on high volume of correct classifications and low volume of false positives and negatives, we can trust that the logistic regression model is accurate and reliable for use.
+
+## Conclusion
+  This study identifies several critical determinants of heart disease risk. First, age emerges as a prominent risk factor, with older patients exhibiting higher susceptibility to heart disease. Cholesterol levels present a counterintuitive association, where very low levels may correlate with increased risk, suggesting potential underlying health issues.  Gender differences are evident, with males showing a heightened risk, likely influenced by biological and hormonal factors. Additionally, the presence of asymptomatic chest pain and variations in ST slope are significant, indicating the need for comprehensive cardiovascular evaluations. For both geneers, elevated fasting blood sugar is consistently linked to a higher risk of heart disease, reinforcing its significance as a risk factor. Finally, a negative correlation between maximum heart rate and age underscores its potential as a marker for heart disease risk. These findings underscore the complexity of heart disease risk and the necessity of integrating multiple factors in risk assessment and management strategies.
+  
+  The logistic regression model demonstrates robust predictive performance, effectively highlighting these risk factors. Significant predictors include cholesterol, fasting blood sugar, gender, chest pain types, and ST slope. The model's accuracy, as evidenced by high classification rates and low false positives/negatives, underscores its utility in identifying individuals at risk. These findings not only enhance understanding of heart disease risk factors but also affirm the model’s efficacy in practical risk assessment, emphasizing the importance of integrating multiple risk factors in cardiovascular health evaluations.
+
