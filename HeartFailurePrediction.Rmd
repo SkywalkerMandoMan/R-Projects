@@ -1,0 +1,227 @@
+---
+title: "Heart Failure Prediction"
+author: "Michael Huynh"
+date: "2024-06-19"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r Data Loading}
+library(pacman)
+
+# Load libraries
+p_load(tidyverse, dplyr, ggplot2, partykit,
+       lubridate, magrittr, ggthemes, GGally,
+       psych, corrplot, partykit, CHAID,
+       tidymodels, rsample)
+heart_df <- read_csv("/Users/michaelhuynh/Desktop/Programming/Datasets/heart.csv")
+```
+ 
+```{r Age Distribution}
+# Age Distribution
+heart_df %>% 
+  ggplot(aes(x = Age)) +
+  geom_histogram(aes(y = ..count..), fill = "blue", color = "black", alpha = 0.7, bins = 30) +
+  labs(title = "Age Distribution",
+       x = "Age",
+       y = "Count") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+```
+Insight 1. 
+- In this geom_bar, the age distribution is heavily concentrated between ages 40 and 60 for patients.
+
+```{r Facet Distribution Plots}
+# Facet Distribution Plots
+heart_df %>% 
+  select(where(is.character)) %>% 
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "value") %>% 
+  ggplot(aes(x = value, fill = variable)) + 
+  facet_wrap( ~ variable, scales = "free") +
+  geom_bar() +
+  theme_bw() +
+  labs(title = "Distribution Plots for Numeric Variables") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold")) +
+  scale_colour_brewer() +
+  theme_light() +
+  guides(fill = "none")
+```
+
+```{r Numeric Plots}
+heart_df %>% 
+  select(where(is.numeric), -HeartDisease) %>% # Leave out HeartDisease column
+  # Increases the number of rows while decreasing number of columns 
+  # Calling all columns with everything(), we pivot the column names so that they become row names 
+  # Creates new column called value that corresponds to original column values
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "value") %>%
+  # Creates ggplot for new unique row name
+  ggplot(aes(x = value, fill = variable)) +
+  # Creates multiple plots for each variable.
+  # The scales argument being specified as free to scale each plot independently of one another.
+  facet_wrap(~ variable, scales = "free") +
+  # Creates 30 bins and yields 70% non-transparency, making the plots easier to see
+  geom_histogram(bins = 30, alpha = 0.7) +
+  labs(title = "Distribution Plots for Numeric Variables") +
+  scale_colour_brewer() +
+  theme_light() +
+  guides(fill = "none")
+```
+Note 1: The age range was normally distributed from 44 and 63 with a mean of 44.
+Note 2: Cholesterol levels were mainly distributed between 89 and 308 with a mean a 198.8.
+Note 3: Max heart rate levels were normally distributed between 111.3 and 162.3 with a mean of 136.8
+Note 4: ST Depression (Oldpeak) was very low and close to 0.
+Note 5: Resting blood pressure was normally distributed between 113.9 and 150.9 with a mean of 132.4
+
+```{r Boxplots}
+# Boxplots
+heart_df %>% 
+  mutate(HeartDisease = factor(HeartDisease)) %>% 
+  select(HeartDisease, where(is.numeric)) %>% 
+  pivot_longer(cols = where(is.numeric), names_to = "variable", values_to = "value") %>% 
+  ggplot(aes(x = HeartDisease, y = value, fill = HeartDisease)) +
+  geom_boxplot() +
+  facet_wrap(~ variable, scales = "free") +
+  labs(x = "Output", y = "Value", title = "Box Plots by Output") +
+  scale_colour_brewer() +
+  theme_light()
+```
+# Note 1: Those who experience heart attacks tend to be older.
+# Note 2: Those with moderate to 0 cholesterol levels had a higher risk of heart attacks compared to thosse with moderate levels.
+# Note 3: Those having lower max heart rates were at a higher heart attack risk compared to those with higher.
+# Note 4: Those with higher oldpeaks were at higher heart attack risk compared to those with low levels
+# Note 5: While at similar levels with each other, those with slightly higher resting blood pressure levels were at higher risk of heart attack.
+# Note 6: Those with fasting blood sugars above 0 were at a significantly higher heart attack risk than those with 0.
+
+```{r Correlation Analysis}
+# Correlation Analysis
+heart_df %>% 
+  select(where(is.numeric)) %>% 
+  ggcorr(label = TRUE, label_size = 4)
+```
+# 
+
+```{r}
+chaid_model <- readRDS("/Users/michaelhuynh/Desktop/Programming/R/chaid_model.rds")
+par(mar = c(5, 4, 4, 2) + 0.1)
+plot(chaid_model,
+     uniform = TRUE,
+     gp = gpar(fontsize = 6,
+               color = "black",
+               lineheight = 0.8))
+```
+
+```{r Model Analysis}
+# Model Analysis
+heart_df$HeartDisease = as.factor(heart_df$HeartDisease)
+
+# Data Split (need rsample to run initial_split!)
+# This allocates 70% of the data from heart_df_factor to training set
+# 30% remaining data is allocated to test set
+# strata argument is used to stratify by HeartDisease to ensure that both training and test sets have similar proportions of those with/without heart disease to prevent
+heart_split = initial_split(heart_df,
+                            prop = 0.7,
+                            strata = HeartDisease)
+
+# Create training and test data sets
+heart_training <- heart_split %>% 
+  training()
+heart_test <- heart_split %>% 
+  testing()
+
+# Data Preprocessing and modeling
+## Creates recipe variable where HeartDisease is dependent variable being affected by all predictors in heart_training dataset.
+## step_corr removes all numeric variables that are highly correlated with each other to mitigate multicollinearity
+## step_normalize standardizes all numeric variables to have zero mean and unit variance; this is really good for KNN or support vector machines.
+## step_dummy converts all nominal (categorical) variables to dummy variables except for HeartDisease as done by -outcomes argument.
+heart_recipe <- recipe(HeartDisease ~ .,
+                       data = heart_training) %>% 
+  step_corr(all_numeric(), threshold = 0.8) %>% 
+  step_normalize(all_numeric()) %>% 
+  step_dummy(all_nominal(), -all_outcomes())
+
+# Creates heart_recipe_prep as recipe variable that uses heart_training data, cleaned of highly correlated variables and has only standardized variables
+# Then it computes statistics like mean and standard deviation while doing transformations like removing highly correlated variables and standardizing numeric predictors.
+heart_recipe_prep <- heart_recipe %>%
+  prep(training = heart_training)
+
+# Takes trained recipe and applies preprocessing steps like removing highly correlated variables above 0.8 threshold, normalizing numeric variables, and applies dummy variables (created in heart_recipe) to the original training dataset.
+# Applies preprocessing steps defined in heart_recipe_prep to original training dataset, heart_training
+heart_training_prep <- heart_recipe_prep %>%
+  bake(new_data = NULL)
+
+# Takes recipe object, heart_recipe_prep, and applies preprocessing steps like removing highly correlated variables above 0.8 threshold, 
+# normalizing numeric variables, and applies dummy variables to the heart_test data set
+heart_test_prep <- heart_recipe_prep %>%
+  bake(new_data = heart_test)
+```
+
+```{r Logistic Model}
+# Logistic Model
+
+# Creates logistic regression model and stores to variable glm_model
+# set_engine sets computational engine to fit model based on general linear model framework
+# set_mode sets mode to classification; this is especially applicable to binary variables.
+glm_model <- logistic_reg() %>% 
+  set_engine('glm') %>% 
+  set_mode('classification')
+
+```
+
+```{r}
+# Fits logistic regression model to the preprocessed training dataset
+glm_fit <- glm_model %>% 
+  fit(HeartDisease ~ .,
+      data = heart_training_prep)
+
+# Logistic Regression Model Predictions on Test Data
+
+# Applies fitted logistic regression model, glm_fit, to testing data and generates class predictions
+glm_class_prediction <- predict(glm_fit,
+                                new_data = heart_test_prep,
+                                type = "class")
+
+# Applies fitted logistic regression model, glm_fit, to testing data and generates probability predictions
+glm_prob_prediction <- predict(glm_fit,
+                        new_data = heart_test_prep,
+                        type = "prob")
+
+# Combines actual outcomes, class predictions, and probability predictions into one dataframe
+glm_results <- heart_test %>% 
+  select(HeartDisease) %>% 
+  bind_cols(glm_class_prediction, glm_prob_prediction)
+
+# Rename glm_results column
+glm_results <- glm_results %>%
+  rename(predicted_class = .pred_class, prob_0 = .pred_0, prob_1 = .pred_1)
+
+# Creates confusion matrix that shows predicted vs actual class labels 
+confusion_matrix = conf_mat(glm_results, truth = HeartDisease, estimate = predicted_class)
+print(confusion_matrix)
+```
+
+```{r}
+# Insight: Based on the high volume of true positives/true negatives and the low frequency of false positives/negatives shown in the 
+# model, it is reliable for accurately distinguishing between the presence and absence of heart disease.
+
+# Create ROC Curve
+roc_curve_data <- glm_results %>%
+  roc_curve(truth = HeartDisease, prob_0)
+
+# Display ROC curve data
+print(roc_curve_data)
+
+# Plot ROC Curve
+roc_curve_data %>% 
+  ggplot(aes(x = 1 - specificity, y = sensitivity)) + 
+  geom_path() +
+  geom_abline(lty = 2, color = "gray") +
+  labs(title = "ROC Curve",
+       x = "False Positive Rate (1 - Specificity)",
+       y = "True Positive Rate (Sensitivity)") +
+    theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold")) 
+```
+
+
